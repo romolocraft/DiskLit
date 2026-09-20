@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $value = "${{ github.ref_name }}" -replace '^v', ''
+          "value=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          dotnet publish DiskLit.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:Version=${{ steps.version.outputs.value }} `
+            --output publish
+          Move-Item publish/DiskLit.exe DiskLit-win-x64.exe
+
+      - name: Verify single file
+        shell: pwsh
+        run: |
+          $size = [math]::Round((Get-Item DiskLit-win-x64.exe).Length / 1MB, 1)
+          Write-Host "DiskLit-win-x64.exe is $size MB"
+          $leftovers = Get-ChildItem publish -File -ErrorAction SilentlyContinue
+          if ($leftovers) {
+            $leftovers | ForEach-Object { Write-Host "unbundled: $($_.Name)" }
+            throw "publish left $($leftovers.Count) file(s) outside the single-file bundle"
+          }
+
+      - name: Create release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} DiskLit-win-x64.exe --generate-notes --title ${{ github.ref_name }}

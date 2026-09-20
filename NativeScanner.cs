@@ -10,41 +10,43 @@ internal static class NativeScanner
     const int KeepLargest = 10_000;
     const int ProgressIntervalMilliseconds = 650;
     const int PartialResultsIntervalMilliseconds = 2_000;
+    const int FolderDepthForFilter = 2;
+    const int FolderLimitForFilter = 400;
     const long MaxFileTime = 2_650_467_743_999_999_999;
 
     public static ScanResult Scan(string root, CancellationToken token, IProgress<ScanProgress> progress)
     {
-        var state = new ScanState(root, progress);
+        var state = new ScanState(progress);
         var solidState = DriveMediaDetector.IsSolidState(root);
         var workers = solidState ? Math.Clamp(Environment.ProcessorCount / 2, 2, 6) : 1;
 
         Traverse(root, state, workers, token);
 
-        var result = state.ToResult(solidState);
+        var result = state.ToResult(root, solidState);
         state.Report(root, result.Largest);
         return result;
     }
 
     static void Traverse(string root, ScanState state, int workers, CancellationToken token)
     {
-        var queue = new ConcurrentStack<string>();
+        var queue = new ConcurrentStack<(string Path, int Folder)>();
         var pending = 1;
-        queue.Push(root);
+        queue.Push((root, state.Folders.Register(-1, "")));
 
         void Work()
         {
-            var children = new List<string>(64);
+            var children = new List<(string Path, int Folder)>(64);
             while (Volatile.Read(ref pending) > 0)
             {
                 token.ThrowIfCancellationRequested();
-                if (!queue.TryPop(out var directory))
+                if (!queue.TryPop(out var item))
                 {
                     Thread.Yield();
                     continue;
                 }
 
                 children.Clear();
-                EnumerateDirectory(directory, state, children.Add, token);
+                EnumerateDirectory(item.Path, item.Folder, state, children.Add, token);
                 if (children.Count > 0)
                 {
                     Interlocked.Add(ref pending, children.Count);
@@ -52,7 +54,7 @@ internal static class NativeScanner
                 }
 
                 Interlocked.Decrement(ref pending);
-                state.ReportIfDue(directory);
+                state.ReportIfDue(item.Path);
             }
         }
 
@@ -63,8 +65,8 @@ internal static class NativeScanner
         }
 
         var tasks = new Task[workers];
-        for (var i = 0; i < workers; i++)
-            tasks[i] = Task.Factory.StartNew(Work, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        for (var index = 0; index < workers; index++)
+            tasks[index] = Task.Factory.StartNew(Work, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         try
         {
@@ -76,7 +78,8 @@ internal static class NativeScanner
         }
     }
 
-    static void EnumerateDirectory(string directory, ScanState state, Action<string> addDirectory, CancellationToken token)
+    static void EnumerateDirectory(string directory, int folder, ScanState state,
+        Action<(string Path, int Folder)> addDirectory, CancellationToken token)
     {
         using var handle = NativeMethods.FindFirstFileEx(ToExtendedPath(Path.Join(directory, "*")),
             NativeMethods.FindInfoLevels.Basic, out var data, NativeMethods.FindSearchOps.NameMatch,
@@ -87,7 +90,8 @@ internal static class NativeScanner
             return;
         }
 
-        var category = state.GetCategory(directory);
+        long ownBytes = 0;
+        long ownFiles = 0;
 
         do
         {
@@ -99,16 +103,19 @@ internal static class NativeScanner
             var fullPath = Path.Join(directory, name);
             if ((data.Attributes & FileAttributes.Directory) != 0)
             {
-                addDirectory(fullPath);
+                addDirectory((fullPath, state.Folders.Register(folder, name)));
                 continue;
             }
 
             var size = ((long)data.FileSizeHigh << 32) | data.FileSizeLow;
-            state.AddFile(new FileEntry(name, fullPath, size, ToLocalTime(data.LastWriteTime)), category);
+            ownBytes += size;
+            ownFiles++;
+            state.AddFile(new FileEntry(name, fullPath, size, ToLocalTime(data.LastWriteTime)));
         }
         while (NativeMethods.FindNextFile(handle, out data));
 
         if (Marshal.GetLastWin32Error() != NativeMethods.ErrorNoMoreFiles) state.AddError();
+        state.Folders.SetOwnTotals(folder, ownBytes, ownFiles);
     }
 
     static bool IsTraversalLoop(in NativeMethods.FindData data) =>
@@ -128,43 +135,23 @@ internal static class NativeScanner
         return @"\\?\" + path;
     }
 
-    sealed class ScanState
+    sealed class ScanState(IProgress<ScanProgress> progress)
     {
-        const string RootCategory = "(raiz)";
-
-        readonly IProgress<ScanProgress> progress;
         readonly PriorityQueue<FileEntry, long> largest = new();
         readonly object heapLock = new();
-        readonly ConcurrentDictionary<string, long> categories = new(StringComparer.OrdinalIgnoreCase);
         readonly Stopwatch elapsed = Stopwatch.StartNew();
-        readonly int rootLength;
         long files;
         long bytes;
         long errors;
         long nextReportAt = ProgressIntervalMilliseconds;
         long nextPartialResultsAt = PartialResultsIntervalMilliseconds;
 
-        public ScanState(string root, IProgress<ScanProgress> progress)
-        {
-            var full = Path.GetFullPath(root);
-            rootLength = full.EndsWith(Path.DirectorySeparatorChar) ? full.Length : full.Length + 1;
-            this.progress = progress;
-        }
+        public FolderIndex Folders { get; } = new();
 
-        public string GetCategory(string directory)
-        {
-            if (directory.Length <= rootLength) return RootCategory;
-            var rest = directory.AsSpan(rootLength);
-            var separator = rest.IndexOf(Path.DirectorySeparatorChar);
-            return new string(separator < 0 ? rest : rest[..separator]);
-        }
-
-        public void AddFile(FileEntry entry, string category)
+        public void AddFile(FileEntry entry)
         {
             Interlocked.Increment(ref files);
             Interlocked.Add(ref bytes, entry.Size);
-            categories.AddOrUpdate(category,
-                static (_, size) => size, static (_, current, size) => current + size, entry.Size);
             lock (heapLock)
             {
                 if (largest.Count < KeepLargest) largest.Enqueue(entry, entry.Size);
@@ -198,9 +185,14 @@ internal static class NativeScanner
             Largest = snapshot
         });
 
-        public ScanResult ToResult(bool solidState) => new(Snapshot(), Interlocked.Read(ref files),
-            Interlocked.Read(ref bytes), Interlocked.Read(ref errors), elapsed.Elapsed,
-            new Dictionary<string, long>(categories, StringComparer.OrdinalIgnoreCase), solidState);
+        public ScanResult ToResult(string root, bool solidState) => new(
+            Snapshot(),
+            Interlocked.Read(ref files),
+            Interlocked.Read(ref bytes),
+            Interlocked.Read(ref errors),
+            elapsed.Elapsed,
+            Folders.Rollup(root, FolderDepthForFilter, FolderLimitForFilter),
+            solidState);
 
         List<FileEntry> Snapshot()
         {

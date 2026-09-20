@@ -9,8 +9,6 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>DiskLit</AssemblyName>
     <RootNamespace>DiskLit</RootNamespace>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>false</SelfContained>
     <InvariantGlobalization>false</InvariantGlobalization>
     <DebugType>embedded</DebugType>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
