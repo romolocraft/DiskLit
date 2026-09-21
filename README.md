@@ -91,9 +91,9 @@ A disk analyzer sees your whole filesystem, so it is fair to ask what it does wi
   Get-FileHash .\DiskLit-win-x64.exe -Algorithm SHA256
   ```
 
-The executable is not signed with a paid code-signing certificate, so the first run shows
-*"Windows protected your PC"*. Click **More info**, then **Run anyway** — or build it yourself from
-source below, which is the reason the source is public.
+The executable is not signed with a paid code-signing certificate, so Windows SmartScreen shows a
+warning the first time you run it. If you would rather not dismiss that warning, build it yourself
+from source below, which is the reason the source is public.
 
 ## Known limitations
 
