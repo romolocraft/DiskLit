@@ -2,14 +2,9 @@
 
 **Find out what is filling your disk. Read-only, no administrator rights, open source.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/romolocraft/DiskLit)](https://github.com/romolocraft/DiskLit/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/romolocraft/DiskLit/total)](https://github.com/romolocraft/DiskLit/releases)
-![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
-
 ![DiskLit scanning a drive](docs/screenshot-dark.png)
 
-### [⬇ Download DiskLit for Windows](https://github.com/romolocraft/DiskLit/releases/latest/download/DiskLit-win-x64.exe)
+### [Download the latest release](https://github.com/romolocraft/DiskLit/releases/latest)
 
 One file. No installer. No runtime to set up. Requires 64-bit Windows 10 or 11.
 
@@ -118,7 +113,7 @@ source below, which is the reason the source is public.
 
 ## Build from source
 
-Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+Requires the .NET 8 SDK.
 
 ```powershell
 git clone https://github.com/romolocraft/DiskLit.git
@@ -139,7 +134,7 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 `IncludeNativeLibrariesForSelfExtract` is not optional. Without it the publish leaves five native
 DLLs beside the executable, and the `.exe` on its own refuses to start.
 
-For a 228 KB build that reuses an installed [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+For a 228 KB build that reuses an installed .NET 8 Desktop Runtime
 instead of bundling it:
 
 ```powershell
