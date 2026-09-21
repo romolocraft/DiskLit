@@ -1,6 +1,11 @@
 bin/
 obj/
 publish/
+preview/
+dist/
+dist-*/
+release-*/
+out/
 
 .vs/
 .vscode/

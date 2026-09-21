@@ -21,7 +21,13 @@ internal sealed record Palette(
     Color SubtleText,
     Color Border,
     Color Selection,
-    Color MenuHighlight);
+    Color MenuHighlight,
+    Color Rail,
+    Color RailSelected,
+    Color Notice,
+    Color NoticeBorder,
+    Color Danger,
+    Color DangerText);
 
 internal static class Theme
 {
@@ -40,7 +46,13 @@ internal static class Theme
         SubtleText: Color.FromArgb(45, 55, 72),
         Border: Color.FromArgb(214, 221, 231),
         Selection: Color.FromArgb(219, 234, 254),
-        MenuHighlight: Color.FromArgb(232, 240, 254));
+        MenuHighlight: Color.FromArgb(232, 240, 254),
+        Rail: Color.FromArgb(236, 240, 246),
+        RailSelected: Color.FromArgb(255, 255, 255),
+        Notice: Color.FromArgb(255, 247, 224),
+        NoticeBorder: Color.FromArgb(234, 199, 108),
+        Danger: Color.FromArgb(194, 46, 46),
+        DangerText: Color.White);
 
     public static readonly Palette Dark = new(
         Background: Color.FromArgb(20, 23, 28),
@@ -53,7 +65,13 @@ internal static class Theme
         SubtleText: Color.FromArgb(230, 233, 239),
         Border: Color.FromArgb(52, 59, 70),
         Selection: Color.FromArgb(30, 58, 95),
-        MenuHighlight: Color.FromArgb(42, 48, 57));
+        MenuHighlight: Color.FromArgb(42, 48, 57),
+        Rail: Color.FromArgb(16, 19, 24),
+        RailSelected: Color.FromArgb(33, 39, 48),
+        Notice: Color.FromArgb(46, 40, 24),
+        NoticeBorder: Color.FromArgb(122, 96, 40),
+        Danger: Color.FromArgb(208, 74, 74),
+        DangerText: Color.White);
 
     public static ThemeMode Mode { get; private set; } = ThemeMode.System;
 
@@ -96,6 +114,9 @@ internal static class Theme
 
     public static void ApplyNativeListStyle(ListView list) =>
         _ = SetWindowTheme(list.Handle, IsDark ? "DarkMode_Explorer" : "Explorer", null);
+
+    public static void ApplyNativeTreeStyle(TreeView tree) =>
+        _ = SetWindowTheme(tree.Handle, IsDark ? "DarkMode_Explorer" : "Explorer", null);
 
     [DllImport("dwmapi.dll")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

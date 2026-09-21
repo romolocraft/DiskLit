@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
@@ -10,8 +11,8 @@ internal static class NativeScanner
     const int KeepLargest = 10_000;
     const int ProgressIntervalMilliseconds = 650;
     const int PartialResultsIntervalMilliseconds = 2_000;
-    const int FolderDepthForFilter = 2;
-    const int FolderLimitForFilter = 400;
+    const int FolderDepthForFilter = 4;
+    const int FolderLimitForFilter = 2_000;
     const long MaxFileTime = 2_650_467_743_999_999_999;
 
     public static ScanResult Scan(string root, CancellationToken token, IProgress<ScanProgress> progress)
@@ -30,31 +31,56 @@ internal static class NativeScanner
     static void Traverse(string root, ScanState state, int workers, CancellationToken token)
     {
         var queue = new ConcurrentStack<(string Path, int Folder)>();
+        using var available = new SemaphoreSlim(0);
         var pending = 1;
+        var completed = 0;
+        ExceptionDispatchInfo? failure = null;
         queue.Push((root, state.Folders.Register(-1, "")));
+        available.Release();
 
         void Work()
         {
-            var children = new List<(string Path, int Folder)>(64);
-            while (Volatile.Read(ref pending) > 0)
+            try
             {
-                token.ThrowIfCancellationRequested();
-                if (!queue.TryPop(out var item))
+                var children = new List<(string Path, int Folder)>(64);
+                var categories = new long[FileTypes.All.Length];
+                while (true)
                 {
-                    Thread.Yield();
-                    continue;
-                }
+                    token.ThrowIfCancellationRequested();
+                    available.Wait(token);
+                    if (Volatile.Read(ref completed) != 0) return;
+                    if (!queue.TryPop(out var item)) continue;
 
-                children.Clear();
-                EnumerateDirectory(item.Path, item.Folder, state, children.Add, token);
-                if (children.Count > 0)
-                {
-                    Interlocked.Add(ref pending, children.Count);
-                    foreach (var child in children) queue.Push(child);
-                }
+                    children.Clear();
+                    Array.Clear(categories);
+                    EnumerateDirectory(item.Path, item.Folder, state, children.Add, categories, token);
+                    state.AddCategories(categories);
+                    if (children.Count > 0)
+                    {
+                        Interlocked.Add(ref pending, children.Count);
+                        foreach (var child in children)
+                        {
+                            queue.Push(child);
+                            available.Release();
+                        }
+                    }
 
-                Interlocked.Decrement(ref pending);
-                state.ReportIfDue(item.Path);
+                    state.ReportIfDue(item.Path);
+                    if (Interlocked.Decrement(ref pending) != 0) continue;
+                    Volatile.Write(ref completed, 1);
+                    available.Release(workers);
+                    return;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                if (Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(error), null) is not null) return;
+                Volatile.Write(ref completed, 1);
+                available.Release(workers);
             }
         }
 
@@ -76,10 +102,12 @@ internal static class NativeScanner
         {
             throw new OperationCanceledException(token);
         }
+
+        failure?.Throw();
     }
 
     static void EnumerateDirectory(string directory, int folder, ScanState state,
-        Action<(string Path, int Folder)> addDirectory, CancellationToken token)
+        Action<(string Path, int Folder)> addDirectory, long[] categories, CancellationToken token)
     {
         using var handle = NativeMethods.FindFirstFileEx(ToExtendedPath(Path.Join(directory, "*")),
             NativeMethods.FindInfoLevels.Basic, out var data, NativeMethods.FindSearchOps.NameMatch,
@@ -110,6 +138,7 @@ internal static class NativeScanner
             var size = ((long)data.FileSizeHigh << 32) | data.FileSizeLow;
             ownBytes += size;
             ownFiles++;
+            categories[(int)FileTypes.Classify(name)] += size;
             state.AddFile(new FileEntry(name, fullPath, size, ToLocalTime(data.LastWriteTime)));
         }
         while (NativeMethods.FindNextFile(handle, out data));
@@ -146,7 +175,23 @@ internal static class NativeScanner
         long nextReportAt = ProgressIntervalMilliseconds;
         long nextPartialResultsAt = PartialResultsIntervalMilliseconds;
 
+        readonly long[] categoryBytes = new long[FileTypes.All.Length];
+
         public FolderIndex Folders { get; } = new();
+
+        public void AddCategories(long[] local)
+        {
+            for (var index = 0; index < local.Length; index++)
+                if (local[index] > 0)
+                    Interlocked.Add(ref categoryBytes[index], local[index]);
+        }
+
+        long[] CategorySnapshot()
+        {
+            var copy = new long[categoryBytes.Length];
+            for (var index = 0; index < copy.Length; index++) copy[index] = Interlocked.Read(ref categoryBytes[index]);
+            return copy;
+        }
 
         public void AddFile(FileEntry entry)
         {
@@ -192,6 +237,9 @@ internal static class NativeScanner
             Interlocked.Read(ref errors),
             elapsed.Elapsed,
             Folders.Rollup(root, FolderDepthForFilter, FolderLimitForFilter),
+            CategorySnapshot(),
+            Folders.Count,
+            root,
             solidState);
 
         List<FileEntry> Snapshot()

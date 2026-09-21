@@ -13,6 +13,9 @@ internal sealed record ScanResult(
     long InaccessibleEntries,
     TimeSpan Elapsed,
     IReadOnlyList<FolderSummary> Folders,
+    IReadOnlyList<long> CategoryBytes,
+    long Directories,
+    string Root,
     bool IsSolidState);
 
 internal sealed class ScanProgress
@@ -38,6 +41,8 @@ internal sealed class FolderIndex
 
     readonly object gate = new();
     readonly List<Folder> folders = new(4096);
+
+    public int Count { get { lock (gate) return folders.Count; } }
 
     public int Register(int parent, string name)
     {
