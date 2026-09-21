@@ -65,20 +65,20 @@ jobs:
         run: |
           $hash = (Get-FileHash DiskLit-win-x64.exe -Algorithm SHA256).Hash.ToLower()
           $notes = @"
-**Download:** [DiskLit-win-x64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/DiskLit-win-x64.exe) — one file, no installer, no runtime needed.
+          **Download:** [DiskLit-win-x64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/DiskLit-win-x64.exe) — one file, no installer, no runtime needed.
 
-Verify what you downloaded:
+          Verify what you downloaded:
 
-``````powershell
-Get-FileHash .\DiskLit-win-x64.exe -Algorithm SHA256
-``````
+          ``````powershell
+          Get-FileHash .\DiskLit-win-x64.exe -Algorithm SHA256
+          ``````
 
-``````
-SHA256  $hash
-``````
+          ``````
+          SHA256  $hash
+          ``````
 
-Built from this tag by GitHub Actions on a clean runner. Read-only analysis, no telemetry, no administrator rights required.
-"@
+          Built from this tag by GitHub Actions on a clean runner. Read-only analysis, no telemetry, no administrator rights required.
+          "@
           $notes | Out-File -FilePath notes.md -Encoding utf8
           gh release create ${{ github.ref_name }} DiskLit-win-x64.exe SHA256SUMS.txt `
             --title ${{ github.ref_name }} `
