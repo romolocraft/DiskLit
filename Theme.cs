@@ -112,11 +112,16 @@ internal static class Theme
         _ = DwmSetWindowAttribute(window.Handle, UseImmersiveDarkMode, ref dark, sizeof(int));
     }
 
-    public static void ApplyNativeListStyle(ListView list) =>
-        _ = SetWindowTheme(list.Handle, IsDark ? "DarkMode_Explorer" : "Explorer", null);
+    public static void ApplyNativeListStyle(ListView list) => ApplyNativeControl(list);
 
-    public static void ApplyNativeTreeStyle(TreeView tree) =>
-        _ = SetWindowTheme(tree.Handle, IsDark ? "DarkMode_Explorer" : "Explorer", null);
+    public static void ApplyNativeTreeStyle(TreeView tree) => ApplyNativeControl(tree);
+
+    static void ApplyNativeControl(Control control)
+    {
+        _ = SetWindowTheme(control.Handle, IsDark ? "DarkMode_Explorer" : "Explorer", null);
+        _ = SendMessage(control.Handle, 0x031A, IntPtr.Zero, IntPtr.Zero);
+        control.Invalidate(true);
+    }
 
     [DllImport("dwmapi.dll")]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -125,6 +130,10 @@ internal static class Theme
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     static extern int SetWindowTheme(IntPtr window, string? applicationName, string? subIdList);
+
+    [DllImport("user32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
 }
 
 internal sealed class ThemedMenuRenderer(Palette palette) : ToolStripProfessionalRenderer(new ThemedColorTable(palette))

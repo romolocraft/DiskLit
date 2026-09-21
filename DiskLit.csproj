@@ -18,7 +18,7 @@
 
   <PropertyGroup>
     <Product>DiskLit</Product>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Authors>@romolocraft</Authors>
     <Description>Analisador de espaço em disco leve para Windows, somente leitura.</Description>
     <Copyright>Copyright (c) 2026 @romolocraft</Copyright>
@@ -27,6 +27,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+    <InternalsVisibleTo Include="DiskLit.Tests" />
     <EmbeddedResource Include="DiskLit.ico" LogicalName="DiskLit.DiskLit.ico" />
     <EmbeddedResource Include="disklit_icon.png" LogicalName="DiskLit.disklit_icon.png" />
   </ItemGroup>

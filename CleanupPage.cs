@@ -27,17 +27,28 @@ internal sealed class CleanupPage : Page
     readonly Label status = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
     readonly Label versionLabel = new() { AutoSize = true, Dock = DockStyle.Right };
     readonly ProgressBar activity = new() { Style = ProgressBarStyle.Marquee, Visible = false, Dock = DockStyle.Right };
+    readonly Label details = new() { Dock = DockStyle.Bottom, AutoEllipsis = true, Padding = new Padding(4), Height = 130 };
 
     CancellationTokenSource? scanCts;
+    CancellationTokenSource? cleanupCts;
     IReadOnlyList<CleanupGroup> groups = [];
     bool updatingChecks;
     bool shuttingDown;
+    public bool IsCleaning => cleanupCts is not null;
 
     public CleanupPage()
     {
         hint.Height = LogicalToDeviceUnits(56);
 
         tree.ImageList = icons;
+        tree.ShowNodeToolTips = true;
+        tree.AfterSelect += (_, e) => details.Text = e.Node?.Tag switch
+        {
+            CleanupItem item => ItemDetails(item),
+            CleanupGroup group => group.Root + "\n" + KnownDataCatalog.Describe(group.Root, !group.Recommended),
+            _ => ""
+        };
+        tree.HandleCreated += (_, _) => Theme.ApplyNativeTreeStyle(tree);
         tree.AfterCheck += OnAfterCheck;
         tree.BeforeExpand += OnBeforeExpand;
 
@@ -65,6 +76,8 @@ internal sealed class CleanupPage : Page
         card.Dock = DockStyle.Fill;
         card.Padding = new Padding(14, 12, 14, 12);
         card.Controls.Add(tree);
+        details.Height = LogicalToDeviceUnits(150);
+        card.Controls.Add(details);
 
         scanButton.Click += async (_, _) => await ScanAsync();
         runButton.Click += async (_, _) => await RunAsync();
@@ -103,6 +116,9 @@ internal sealed class CleanupPage : Page
         tree.BackColor = palette.Surface;
         tree.ForeColor = palette.Text;
         tree.LineColor = palette.Border;
+        details.BackColor = palette.Surface;
+        details.ForeColor = palette.Text;
+        if (tree.IsHandleCreated) Theme.ApplyNativeTreeStyle(tree);
         Skin(scanButton, palette.Accent, palette.AccentText, palette);
         Skin(runButton, palette.Danger, palette.DangerText, palette);
         tree.Invalidate();
@@ -110,6 +126,7 @@ internal sealed class CleanupPage : Page
 
     async Task ScanAsync()
     {
+        if (Busy || shuttingDown) return;
         scanCts?.Dispose();
         var currentCts = new CancellationTokenSource();
         scanCts = currentCts;
@@ -125,6 +142,7 @@ internal sealed class CleanupPage : Page
         try
         {
             groups = await Task.Run(() => Cleanup.BuildPlan(token), token);
+            if (shuttingDown || IsDisposed || Disposing) return;
             Populate();
         }
         catch (OperationCanceledException)
@@ -150,13 +168,14 @@ internal sealed class CleanupPage : Page
         updatingChecks = true;
         tree.BeginUpdate();
         tree.Nodes.Clear();
+        details.Text = "";
 
         foreach (var group in groups)
         {
             var node = new TreeNode($"{Strings.Get(group.Name)}   ·   {Humanize.Bytes(group.TotalBytes)}   ·   {Humanize.Number(group.Items.Count)}")
             {
                 Tag = group,
-                Checked = true,
+                Checked = group.Recommended,
                 ToolTipText = group.Root
             };
 
@@ -185,7 +204,7 @@ internal sealed class CleanupPage : Page
             {
                 Tag = item,
                 Checked = e.Node.Checked,
-                ToolTipText = item.FullPath
+                ToolTipText = ItemDetails(item)
             };
 
             var index = IconIndex(item, name);
@@ -229,6 +248,11 @@ internal sealed class CleanupPage : Page
     {
         var dot = name.LastIndexOf('.');
         return dot < 0 ? "<none>" : name[dot..].ToLowerInvariant();
+    }
+
+    static string ItemDetails(CleanupItem item)
+    {
+        return item.FullPath + "\n" + KnownDataCatalog.Describe(item.FullPath, item.IsDeep);
     }
 
     void OnAfterCheck(object? sender, TreeViewEventArgs e)
@@ -298,12 +322,13 @@ internal sealed class CleanupPage : Page
 
     async Task RunAsync()
     {
+        if (Busy || shuttingDown) return;
         var items = SelectedItems();
         if (items.Count == 0) return;
 
         var total = items.Sum(item => item.Size);
         var answer = MessageBox.Show(
-            Strings.Format(UiText.CleanupConfirmFormat, Humanize.Number(items.Count), Humanize.Bytes(total)),
+            Strings.Format(UiText.CleanupConfirmFormat, Humanize.Number(items.Count), Humanize.Bytes(total)) + "\n\n" + CleanupMessages.Limitation,
             Strings.Get(UiText.CleanupConfirmTitle),
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
@@ -314,23 +339,32 @@ internal sealed class CleanupPage : Page
         runButton.Enabled = false;
         activity.Visible = true;
         Busy = true;
+        tree.Enabled = false;
+        using var currentCleanup = new CancellationTokenSource();
+        cleanupCts = currentCleanup;
 
         try
         {
-            var outcome = await Task.Run(() => Cleanup.Execute(items));
+            var outcome = await Task.Run(() => Cleanup.Execute(items, currentCleanup.Token));
             if (shuttingDown || IsDisposed || Disposing) return;
-            status.Text = Strings.Format(UiText.CleanupDoneFormat,
-                Humanize.Number(outcome.Removed), Humanize.Number(outcome.Skipped));
+            status.Text = outcome.Cancelled
+                ? Strings.Get(UiText.CleanupCancelledBusy)
+                : outcome.Failed ? CleanupMessages.Failed(outcome.Removed)
+                : Strings.Format(UiText.CleanupDoneFormat, Humanize.Number(outcome.Removed), Humanize.Number(outcome.Skipped));
+            if (outcome.Cancelled || outcome.Failed)
+                MessageBox.Show(status.Text, Strings.Get(UiText.CleanupConfirmTitle), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             groups = [];
             tree.Nodes.Clear();
         }
         finally
         {
+            cleanupCts = null;
             if (!shuttingDown && !IsDisposed && !Disposing)
             {
                 scanButton.Enabled = true;
                 activity.Visible = false;
                 Busy = false;
+                tree.Enabled = true;
             }
         }
     }
@@ -348,7 +382,7 @@ internal sealed class CleanupPage : Page
 
         var selected = SelectedItems();
         var available = groups.Sum(group => group.Items.Count);
-        runButton.Enabled = selected.Count > 0;
+        runButton.Enabled = !Busy && selected.Count > 0;
         status.Text = Strings.Format(UiText.CleanupSelectedFormat,
             Humanize.Number(selected.Count), Humanize.Number(available), Humanize.Bytes(selected.Sum(item => item.Size)));
     }
@@ -369,5 +403,6 @@ internal sealed class CleanupPage : Page
     {
         shuttingDown = true;
         scanCts?.Cancel();
+        cleanupCts?.Cancel();
     }
 }

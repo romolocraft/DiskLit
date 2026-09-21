@@ -2,11 +2,14 @@ using System.Runtime.InteropServices;
 
 namespace DiskLit;
 
-internal sealed record CleanupItem(string FullPath, long Size, bool IsDirectory);
+internal sealed record CleanupFingerprint(long Size, long Files, DateTime NewestWriteUtc, string MetadataHash);
 
-internal sealed record CleanupGroup(UiText Name, string Root, IReadOnlyList<CleanupItem> Items, long TotalBytes);
+internal sealed record CleanupItem(string FullPath, long Size, bool IsDirectory, string SourceRoot,
+    CleanupFingerprint? Fingerprint = null, bool IsDeep = false);
 
-internal sealed record CleanupOutcome(int Removed, int Skipped, long BytesRemoved);
+internal sealed record CleanupGroup(UiText Name, string Root, IReadOnlyList<CleanupItem> Items, long TotalBytes, bool Recommended = true);
+
+internal sealed record CleanupOutcome(int Removed, int Skipped, long BytesRemoved, bool Cancelled = false, bool Failed = false);
 
 internal static class Cleanup
 {
@@ -27,50 +30,67 @@ internal static class Cleanup
             {
                 token.ThrowIfCancellationRequested();
                 if (!IsInside(entry.Path, target.Root)) continue;
-                var size = entry.IsDirectory ? DirectorySize(entry.Path, token) : FileSize(entry.Path);
-                if (size < 0) continue;
-                items.Add(new CleanupItem(entry.Path, size, entry.IsDirectory));
-                total += size;
+                var fingerprint = CleanupInspection.Inspect(entry.Path, token);
+                if (fingerprint is null) continue;
+                items.Add(new CleanupItem(entry.Path, fingerprint.Size, entry.IsDirectory, target.Root, fingerprint));
+                total += fingerprint.Size;
             }
 
             if (items.Count > 0) groups.Add(new CleanupGroup(target.Name, target.Root, items, total));
         }
 
+        groups.AddRange(DeepCleanup.Find(token));
         return groups;
     }
 
-    public static CleanupOutcome Execute(IReadOnlyList<CleanupItem> items)
+    public static CleanupOutcome Execute(IReadOnlyList<CleanupItem> items, CancellationToken token = default)
     {
-        var allowed = Targets()
-            .Select(target => target.Root)
-            .Where(root => !string.IsNullOrEmpty(root))
-            .ToList();
-
-        var verified = items
-            .Where(item => allowed.Any(root => IsInside(item.FullPath, root)))
-            .ToList();
-
-        if (verified.Count == 0) return new CleanupOutcome(0, items.Count, 0);
-
-        var paths = verified.Select(item => item.FullPath).ToList();
-        if (!OnStaThread(() => Recycle(paths)))
-            return new CleanupOutcome(0, items.Count, 0);
-
-        var removed = 0;
-        long bytes = 0;
-        foreach (var item in verified)
+        CleanupOutcome outcome = new(0, items.Count, 0, Cancelled: true);
+        OnStaThread(() =>
         {
-            if (StillPresent(item)) continue;
-            removed++;
-            bytes += item.Size;
-        }
-
-        return new CleanupOutcome(removed, items.Count - removed, bytes);
+            if (!ValidateBatch(items, token)) return false;
+            var result = RecycleBin.Move(items, () => ValidateBatch(items, token), token);
+            outcome = new CleanupOutcome(result.Removed, items.Count - result.Removed,
+                result.Bytes, Cancelled: !result.Started, Failed: result.Started && !result.Success);
+            return result.Success;
+        });
+        return outcome;
     }
 
-    static bool StillPresent(CleanupItem item) =>
-        item.IsDirectory ? Directory.Exists(item.FullPath) : File.Exists(item.FullPath);
-
+    internal static bool ValidateBatch(IReadOnlyList<CleanupItem> items, CancellationToken token = default)
+    {
+        try
+        {
+            if (items.Count == 0 || token.IsCancellationRequested) return false;
+            var roots = Targets().ToArray();
+            var inventory = items.Any(item => item.IsDeep) ? DeepCleanup.CaptureInventory() : null;
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var ordered = items.Select(item => Path.GetFullPath(item.FullPath)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+            for (var index = 1; index < ordered.Length; index++)
+                if (IsInside(ordered[index], ordered[index - 1])) return false;
+            foreach (var item in items)
+            {
+                if (token.IsCancellationRequested || !IsInside(item.FullPath, item.SourceRoot)
+                    || !paths.Add(Path.GetFullPath(item.FullPath))) return false;
+                if (item.IsDeep)
+                {
+                    if (!DeepCleanup.IsApprovedRoot(item.SourceRoot) || inventory is null
+                        || !string.Equals(Path.GetDirectoryName(item.FullPath), item.SourceRoot, StringComparison.OrdinalIgnoreCase)
+                        || !DeepCleanup.Eligible(item.FullPath, inventory)) return false;
+                }
+                else if (!roots.Any(target => string.Equals(target.Root, item.SourceRoot, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(Path.GetDirectoryName(item.FullPath), target.Root, StringComparison.OrdinalIgnoreCase)
+                    && System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(target.Pattern, Path.GetFileName(item.FullPath))))
+                    return false;
+                if (item.Fingerprint is null || item.Fingerprint.Size != item.Size
+                    || ((File.GetAttributes(item.FullPath) & FileAttributes.Directory) != 0) != item.IsDirectory
+                    || CleanupInspection.Inspect(item.FullPath, token, exclusive: true) != item.Fingerprint) return false;
+            }
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException
+            or NotSupportedException or OperationCanceledException or System.Security.SecurityException) { return false; }
+    }
     static bool OnStaThread(Func<bool> action)
     {
         var result = false;
@@ -91,9 +111,15 @@ internal static class Cleanup
         return result;
     }
 
-    public static bool RecycleChosen(string path) =>
-        !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path) && OnStaThread(() => Recycle([path]));
-
+    public static bool RecycleChosen(string path)
+    {
+        var snapshot = CleanupInspection.Inspect(path, CancellationToken.None, exclusive: true, protectPersonalData: false);
+        if (snapshot is null) return false;
+        var item = new CleanupItem(path, snapshot.Size, Directory.Exists(path), Path.GetDirectoryName(path)!, snapshot);
+        return OnStaThread(() => RecycleBin.Move([item],
+            () => CleanupInspection.Inspect(path, CancellationToken.None, exclusive: true, protectPersonalData: false) == snapshot,
+            CancellationToken.None).Success);
+    }
     static IEnumerable<Target> Targets()
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -101,35 +127,12 @@ internal static class Cleanup
 
         yield return new Target(UiText.TargetUserTemp, Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), "*");
         yield return new Target(UiText.TargetWindowsTemp, Path.Join(windows, "Temp"), "*");
-        yield return new Target(UiText.TargetUpdateCache, Path.Join(windows, "SoftwareDistribution", "Download"), "*");
+
         yield return new Target(UiText.TargetThumbnails, Path.Join(local, "Microsoft", "Windows", "Explorer"), "thumbcache_*.db");
         yield return new Target(UiText.TargetCrashDumps, Path.Join(local, "CrashDumps"), "*");
-        yield return new Target(UiText.TargetDeliveryOptimization,
-            Path.Join(windows, "ServiceProfiles", "NetworkService", "AppData", "Local", "Microsoft", "Windows", "DeliveryOptimization"), "*");
 
-        foreach (var browser in BrowserCaches(local))
-            yield return new Target(UiText.TargetBrowserCache, browser, "*");
-    }
-
-    static IEnumerable<string> BrowserCaches(string local)
-    {
-        yield return Path.Join(local, "Microsoft", "Edge", "User Data", "Default", "Cache", "Cache_Data");
-        yield return Path.Join(local, "Google", "Chrome", "User Data", "Default", "Cache", "Cache_Data");
-
-        var firefox = Path.Join(local, "Mozilla", "Firefox", "Profiles");
-        if (!Directory.Exists(firefox)) yield break;
-
-        string[] profiles;
-        try
-        {
-            profiles = Directory.GetDirectories(firefox);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            yield break;
-        }
-
-        foreach (var profile in profiles) yield return Path.Join(profile, "cache2", "entries");
+        foreach (var rule in KnownDataCatalog.Rules.Where(rule => rule.OfferCleanup))
+            yield return new Target(UiText.TargetKnownCache, rule.Root, "*");
     }
 
     static IEnumerable<(string Path, bool IsDirectory)> SafeEntries(string root, string pattern)
@@ -137,6 +140,7 @@ internal static class Cleanup
         string[] entries;
         try
         {
+            if (!CleanupInspection.SafePath(root)) yield break;
             entries = Directory.GetFileSystemEntries(root, pattern, SearchOption.TopDirectoryOnly);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -161,44 +165,7 @@ internal static class Cleanup
         }
     }
 
-    static long FileSize(string path)
-    {
-        try
-        {
-            return new FileInfo(path).Length;
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            return -1;
-        }
-    }
-
-    static long DirectorySize(string root, CancellationToken token)
-    {
-        long total = 0;
-        var pending = new Stack<string>();
-        pending.Push(root);
-
-        while (pending.TryPop(out var directory))
-        {
-            token.ThrowIfCancellationRequested();
-            foreach (var (path, isDirectory) in SafeEntries(directory, "*"))
-            {
-                if (isDirectory)
-                {
-                    pending.Push(path);
-                    continue;
-                }
-
-                var size = FileSize(path);
-                if (size > 0) total += size;
-            }
-        }
-
-        return total;
-    }
-
-    static bool IsInside(string candidate, string root)
+    internal static bool IsInside(string candidate, string root)
     {
         try
         {
@@ -214,41 +181,4 @@ internal static class Cleanup
         }
     }
 
-    static bool Recycle(IEnumerable<string> paths)
-    {
-        var joined = string.Join('\0', paths) + "\0\0";
-        var operation = new ShellFileOperation
-        {
-            Function = FoDelete,
-            From = joined,
-            Flags = FofAllowUndo | FofNoConfirmation | FofWantNukeWarning | FofNoErrorUi | FofNoConfirmMkDir | FofSilent
-        };
-
-        return ShFileOperation(ref operation) == 0 && !operation.Aborted;
-    }
-
-    const uint FoDelete = 3;
-    const ushort FofAllowUndo = 0x0040;
-    const ushort FofNoConfirmation = 0x0010;
-    const ushort FofNoErrorUi = 0x0400;
-    const ushort FofNoConfirmMkDir = 0x0200;
-    const ushort FofSilent = 0x0004;
-    const ushort FofWantNukeWarning = 0x4000;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    struct ShellFileOperation
-    {
-        public IntPtr Window;
-        public uint Function;
-        [MarshalAs(UnmanagedType.LPWStr)] public string From;
-        [MarshalAs(UnmanagedType.LPWStr)] public string? To;
-        public ushort Flags;
-        [MarshalAs(UnmanagedType.Bool)] public bool Aborted;
-        public IntPtr NameMappings;
-        [MarshalAs(UnmanagedType.LPWStr)] public string? ProgressTitle;
-    }
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, EntryPoint = "SHFileOperationW")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    static extern int ShFileOperation(ref ShellFileOperation operation);
 }

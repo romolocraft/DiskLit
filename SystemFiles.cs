@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace DiskLit;
 
 internal static class SystemFiles
@@ -42,7 +44,23 @@ internal static class SystemFiles
         return null;
     }
 
-    public static bool IsSystemItem(string fullPath) => Describe(fullPath) is not null;
+    static readonly ConcurrentDictionary<string, bool> SystemPaths = new(StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsSystemItem(string fullPath)
+    {
+        if (SystemPaths.TryGetValue(fullPath, out var known)) return known;
+        var system = KnownDataCatalog.Match(fullPath)?.Risk == DataRisk.Critical || Describe(fullPath) is not null;
+        if (SystemPaths.Count < 16_384) SystemPaths[fullPath] = system;
+        return system;
+    }
+
+    public static string? Details(string fullPath)
+    {
+        var known = KnownDataCatalog.Match(fullPath);
+        var legacy = Describe(fullPath);
+        if (known is null && legacy is null) return null;
+        return (legacy is { } text ? Strings.Get(text) + "\n" : "") + KnownDataCatalog.Describe(fullPath);
+    }
 
     static bool Contains(string path, string segment)
     {

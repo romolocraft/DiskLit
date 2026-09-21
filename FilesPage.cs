@@ -362,7 +362,7 @@ internal sealed class FilesPage : Page
 
         if (lastResult is null) stats.Text = Strings.Get(UiText.Intro);
 
-        RefreshTypes();
+        RecolorTypes();
         if (list.IsHandleCreated) Theme.ApplyNativeListStyle(list);
         if (folderTree.IsHandleCreated) Theme.ApplyNativeTreeStyle(folderTree);
         driveList.Invalidate();
@@ -391,11 +391,8 @@ internal sealed class FilesPage : Page
         if (e.Index < 0 || e.Index >= driveList.Items.Count) return;
         if (driveList.Items[e.Index] is not DriveChoice choice) return;
 
-        using var title = new SolidBrush(palette.Text);
-        using var detail = new SolidBrush(palette.MutedText);
-        using var titleFont = new Font("Segoe UI Semibold", 9.5f);
-        e.Graphics.DrawString(choice.Label, titleFont, title, area.X + 10, area.Y + 6);
-        e.Graphics.DrawString(choice.Usage, Font, detail, area.X + 10, area.Y + 24);
+        e.Graphics.DrawString(choice.Label, Draw.Text("Segoe UI Semibold", 9.5f), Draw.Brush(palette.Text), area.X + 10, area.Y + 6);
+        e.Graphics.DrawString(choice.Usage, Font, Draw.Brush(palette.MutedText), area.X + 10, area.Y + 24);
     }
 
     static void DrawComboItem(object? sender, DrawItemEventArgs e)
@@ -468,10 +465,25 @@ internal sealed class FilesPage : Page
         return segments;
     }
 
+    static readonly Font LegendFont = new("Segoe UI", 8.5f);
+
+    void RecolorTypes()
+    {
+        var palette = Theme.Current;
+        foreach (Control child in typesTable.Controls)
+        {
+            child.BackColor = palette.Background;
+            if (child is Label label)
+                label.ForeColor = typesTable.GetColumn(label) == 1 ? palette.Text : palette.MutedText;
+        }
+    }
+
     void RefreshTypes()
     {
         typesTable.SuspendLayout();
+        var previous = typesTable.Controls.Cast<Control>().ToArray();
         typesTable.Controls.Clear();
+        foreach (var stale in previous) stale.Dispose();
         typesTable.RowStyles.Clear();
 
         var palette = Theme.Current;
@@ -493,12 +505,11 @@ internal sealed class FilesPage : Page
                 Margin = new Padding(0, 6, 8, 6),
                 BackColor = palette.Background
             };
-            var legendFont = new Font("Segoe UI", 8.5f);
             var name = new Label
             {
                 AutoSize = true,
                 AutoEllipsis = true,
-                Font = legendFont,
+                Font = LegendFont,
                 Text = Strings.Get(FileTypes.Label(category)),
                 ForeColor = palette.Text,
                 BackColor = palette.Background,
@@ -507,7 +518,7 @@ internal sealed class FilesPage : Page
             var size = new Label
             {
                 AutoSize = true,
-                Font = legendFont,
+                Font = LegendFont,
                 Text = lastResult is null ? "—" : Humanize.Bytes(bytes),
                 ForeColor = palette.MutedText,
                 BackColor = palette.Background,
@@ -516,7 +527,7 @@ internal sealed class FilesPage : Page
             var share = new Label
             {
                 AutoSize = true,
-                Font = legendFont,
+                Font = LegendFont,
                 Text = total > 0 ? string.Create(CultureInfo.CurrentCulture, $"{bytes * 100.0 / total:0}%") : "",
                 ForeColor = palette.MutedText,
                 BackColor = palette.Background,
@@ -731,14 +742,18 @@ internal sealed class FilesPage : Page
     void ShowNotice()
     {
         var file = Selected();
-        var explanation = file is null ? null : SystemFiles.Describe(file.FullPath);
+        var explanation = file is null ? null : SystemFiles.Details(file.FullPath);
         if (explanation is null)
         {
             notice.Visible = false;
             return;
         }
 
-        var text = Strings.Get(explanation.Value);
+        var text = explanation;
+        noticeHeadline.Text = KnownDataCatalog.Match(file!.FullPath)?.Recreatable == true
+            ? new LocalText("Review before cleaning", "Revise antes de limpar", "Revise antes de limpiar", "Проверьте перед очисткой").ToString()
+            : Strings.Get(UiText.DoNotDeleteHeadline);
+        noticeTitle.Text = Path.GetFileName(file.FullPath);
         noticeBody.Text = text;
 
         var available = Math.Max(LogicalToDeviceUnits(200), listCard.ClientSize.Width - listCard.Padding.Horizontal - notice.Padding.Horizontal);

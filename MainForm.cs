@@ -4,6 +4,7 @@ namespace DiskLit;
 
 internal sealed class MainForm : Form
 {
+
     const int WmSettingChange = 0x001A;
     const int WmDeviceChange = 0x0219;
 
@@ -21,6 +22,7 @@ internal sealed class MainForm : Form
     readonly Page[] pages;
     readonly UiText[] navLabels = [UiText.NavFiles, UiText.NavActive, UiText.NavCleanup];
     readonly System.Windows.Forms.Timer busyTimer = new() { Interval = 40 };
+    readonly System.Windows.Forms.Timer closeTimer = new() { Interval = 100 };
     int current = -1;
 
     void SyncBusy(int index)
@@ -44,6 +46,12 @@ internal sealed class MainForm : Form
         Icon = Assets.AppIcon;
 
         pages = [new FilesPage(), new ActivePage(), new CleanupPage()];
+        closeTimer.Tick += (_, _) =>
+        {
+            if (pages.OfType<CleanupPage>().Any(page => page.IsCleaning)) return;
+            closeTimer.Stop();
+            Close();
+        };
         navButtons = new NavButton[pages.Length];
 
         BuildUi();
@@ -149,12 +157,7 @@ internal sealed class MainForm : Form
         Text = Strings.Get(UiText.AppTitle);
         for (var index = 0; index < navButtons.Length; index++)
             navButtons[index].Text = "   " + Strings.Get(navLabels[index]);
-        themeButton.Text = Strings.Get(Theme.Mode switch
-        {
-            ThemeMode.Light => UiText.ThemeLight,
-            ThemeMode.Dark => UiText.ThemeDark,
-            _ => UiText.ThemeSystem
-        });
+        ApplyThemeLabel();
         optionsButton.Text = "";
         optionsButton.AccessibleName = Strings.Get(UiText.OptionsTitle);
         optionsTip.SetToolTip(optionsButton, Strings.Get(UiText.OptionsTitle));
@@ -171,7 +174,7 @@ internal sealed class MainForm : Form
         };
         settings.Apply();
         settings.Save();
-        ApplyLanguage();
+        ApplyThemeLabel();
         ApplyTheme();
     }
 
@@ -186,38 +189,49 @@ internal sealed class MainForm : Form
         dialog.ShowDialog(this);
     }
 
+    void ApplyThemeLabel() => themeButton.Text = Strings.Get(Theme.Mode switch
+    {
+        ThemeMode.Light => UiText.ThemeLight,
+        ThemeMode.Dark => UiText.ThemeDark,
+        _ => UiText.ThemeSystem
+    });
+
     void ApplyTheme()
     {
         var palette = Theme.Current;
         SuspendLayout();
-
-        BackColor = palette.Background;
-        ForeColor = palette.Text;
-        host.BackColor = palette.Background;
-        rail.BackColor = palette.Rail;
-        brand.BackColor = palette.Rail;
-        brandName.BackColor = palette.Rail;
-        brandName.ForeColor = palette.Text;
-        brandIcon.BackColor = palette.Rail;
-        brandIcon.Image = Assets.Glyph(brandIcon.Width, palette.Accent);
-
-        foreach (var button in navButtons)
+        try
         {
-            button.Palette = palette;
-            button.Restyle();
-            button.Invalidate();
+            BackColor = palette.Background;
+            ForeColor = palette.Text;
+            host.BackColor = palette.Background;
+            rail.BackColor = palette.Rail;
+            brand.BackColor = palette.Rail;
+            brandName.BackColor = palette.Rail;
+            brandName.ForeColor = palette.Text;
+            brandIcon.BackColor = palette.Rail;
+            brandIcon.Image = Assets.Glyph(brandIcon.Width, palette.Accent);
+
+            foreach (var button in navButtons)
+            {
+                button.Palette = palette;
+                button.Restyle();
+                button.Invalidate();
+            }
+
+            railBottom.BackColor = palette.Rail;
+            foreach (var button in new[] { themeButton, optionsButton })
+                button.RecolorRail(palette, false);
+
+            foreach (var page in pages) page.ApplyTheme(palette);
+
+            if (IsHandleCreated) Theme.ApplyTitleBar(this);
         }
-
-        railBottom.BackColor = palette.Rail;
-        foreach (var button in new[] { themeButton, optionsButton })
-            button.RecolorRail(palette, false);
-
-        foreach (var page in pages) page.ApplyTheme(palette);
-
-        if (IsHandleCreated) Theme.ApplyTitleBar(this);
-
-        ResumeLayout();
-        Invalidate(true);
+        finally
+        {
+            ResumeLayout(false);
+            Invalidate(true);
+        }
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -232,6 +246,7 @@ internal sealed class MainForm : Form
         if (disposing)
         {
             busyTimer.Dispose();
+            closeTimer.Dispose();
             optionsTip.Dispose();
         }
         base.Dispose(disposing);
@@ -241,6 +256,12 @@ internal sealed class MainForm : Form
     {
         foreach (var page in pages) page.CancelWork();
         busyTimer.Stop();
+        if (pages.OfType<CleanupPage>().Any(page => page.IsCleaning))
+        {
+            e.Cancel = true;
+            Enabled = false;
+            closeTimer.Start();
+        }
         base.OnFormClosing(e);
     }
 

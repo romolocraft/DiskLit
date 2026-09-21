@@ -86,10 +86,8 @@ internal enum UiText
     CleanupNotDeep,
     TargetUserTemp,
     TargetWindowsTemp,
-    TargetUpdateCache,
     TargetThumbnails,
     TargetCrashDumps,
-    TargetDeliveryOptimization,
     TargetBrowserCache,
     CategoryVideo,
     CategoryImages,
@@ -127,7 +125,10 @@ internal enum UiText
     ThemeOptionSystem,
     ThemeOptionLight,
     ThemeOptionDark,
-    SectionFolders
+    SectionFolders,
+    TargetOrphanedApps,
+    TargetKnownCache,
+    CleanupCancelledBusy
 }
 
 internal static class Strings
@@ -225,7 +226,7 @@ internal static class Strings
             "Executável",
             "{0} processos • {1} de memória em uso",
             "Não foi possível ler a lista de processos.",
-            "Limpeza básica e rápida de locais temporários conhecidos. Não é uma limpeza profunda e não toca em arquivos pessoais, documentos ou fotos.",
+            "Caches conhecidos e possíveis resíduos. Revise o conteúdo: candidatos profundos ficam desmarcados.",
             "Procurar",
             "Mover para a Lixeira",
             "Procurando...",
@@ -242,10 +243,8 @@ internal static class Strings
             "Marque os locais que deseja limpar.",
             "Arquivos temporários (usuário)",
             "Arquivos temporários (Windows)",
-            "Cache do Windows Update",
             "Cache de miniaturas",
             "Despejos de falhas",
-            "Cache de Otimização de Entrega",
             "Cache de navegadores",
             "Vídeo",
             "Imagens",
@@ -283,7 +282,10 @@ internal static class Strings
             "Sistema",
             "Claro",
             "Escuro",
-            "PASTAS"
+            "PASTAS",
+            "Possíveis sobras de aplicativos",
+            "Caches conhecidos de aplicativos",
+            "Limpeza cancelada: um ou mais itens estão abertos, em uso ou mudaram desde a análise. Nenhum item foi enviado à Lixeira."
         ],
         Language.Spanish =>
         [
@@ -343,7 +345,7 @@ internal static class Strings
             "Ejecutable",
             "{0} procesos • {1} de memoria en uso",
             "No se pudo leer la lista de procesos.",
-            "Limpieza básica y rápida de ubicaciones temporales conocidas. No es una limpieza profunda y no toca archivos personales, documentos ni fotos.",
+            "Cachés conocidos y posibles restos. Revise el contenido: los candidatos profundos quedan sin marcar.",
             "Buscar",
             "Mover a la Papelera",
             "Buscando...",
@@ -360,10 +362,8 @@ internal static class Strings
             "Marque las ubicaciones que desea limpiar.",
             "Archivos temporales (usuario)",
             "Archivos temporales (Windows)",
-            "Caché de Windows Update",
             "Caché de miniaturas",
             "Volcados de fallos",
-            "Caché de Optimización de entrega",
             "Caché de navegadores",
             "Vídeo",
             "Imágenes",
@@ -401,7 +401,10 @@ internal static class Strings
             "Sistema",
             "Claro",
             "Oscuro",
-            "CARPETAS"
+            "CARPETAS",
+            "Posibles restos de aplicaciones",
+            "Cachés conocidos de aplicaciones",
+            "Limpieza cancelada: uno o más elementos están abiertos, en uso o cambiaron desde el análisis. No se envió ningún elemento a la Papelera."
         ],
         Language.Russian =>
         [
@@ -461,7 +464,7 @@ internal static class Strings
             "Исполняемый файл",
             "{0} процессов • {1} памяти используется",
             "Не удалось получить список процессов.",
-            "Базовая быстрая очистка известных временных папок. Это не глубокая очистка, и она не затрагивает личные файлы, документы и фотографии.",
+            "Известные кэши и возможные остатки. Проверьте содержимое: кандидаты глубокой очистки не отмечены.",
             "Найти",
             "Переместить в корзину",
             "Поиск...",
@@ -478,10 +481,8 @@ internal static class Strings
             "Отметьте расположения, которые нужно очистить.",
             "Временные файлы (пользователь)",
             "Временные файлы (Windows)",
-            "Кэш Центра обновления Windows",
             "Кэш эскизов",
             "Дампы сбоев",
-            "Кэш оптимизации доставки",
             "Кэш браузеров",
             "Видео",
             "Изображения",
@@ -519,7 +520,10 @@ internal static class Strings
             "Системная",
             "Светлая",
             "Тёмная",
-            "ПАПКИ"
+            "ПАПКИ",
+            "Возможные остатки приложений",
+            "Известные кэши приложений",
+            "Очистка отменена: один или несколько элементов открыты, используются или изменились после анализа. Ничего не перемещено в корзину."
         ],
         _ =>
         [
@@ -579,7 +583,7 @@ internal static class Strings
             "Executable",
             "{0} processes • {1} memory in use",
             "Could not read the process list.",
-            "A basic, fast cleanup of well-known temporary locations. This is not a deep clean, and it never touches personal files, documents or photos.",
+            "Known caches and possible leftovers. Review the contents: deep candidates are unchecked.",
             "Find items",
             "Move to Recycle Bin",
             "Searching...",
@@ -596,10 +600,8 @@ internal static class Strings
             "Tick the locations you want to clean.",
             "Temporary files (user)",
             "Temporary files (Windows)",
-            "Windows Update cache",
             "Thumbnail cache",
             "Crash dumps",
-            "Delivery Optimization cache",
             "Browser caches",
             "Video",
             "Images",
@@ -637,7 +639,10 @@ internal static class Strings
             "System",
             "Light",
             "Dark",
-            "FOLDERS"
+            "FOLDERS",
+            "Possible application leftovers",
+            "Known application caches",
+            "Cleanup cancelled: one or more items are open, in use, or changed since the scan. Nothing was sent to the Recycle Bin."
         ]
     };
 }

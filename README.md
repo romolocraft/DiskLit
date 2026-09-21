@@ -30,8 +30,9 @@ genuinely faster than DiskLit, and if raw speed with elevation is what you need,
 DiskLit walks the filesystem with `FindFirstFileEx`, which costs some speed and buys you a scan
 that never asks for administrator rights.
 
-In practice it is still quick. On a 446 GB NTFS SSD, a warm scan of **945,228 files across 140,923
-folders finished in about 2 seconds**. The first scan after a reboot is slower, because the
+In practice it is still quick. The scan in the screenshot above covered **942,834 files across
+140,663 folders on a 446 GB NTFS SSD in three seconds** — the counts, the elapsed time and the rate
+are all in the status bar of that image. The first scan after a reboot is slower, because the
 filesystem cache is cold.
 
 ## What it does
@@ -51,13 +52,31 @@ processes served from protected Windows directories. Backed by a single `NtQuery
 call rather than one performance counter per process. It is read-only — DiskLit never ends a
 process — and it stops sampling entirely when the tab is not visible.
 
-**Cleanup.** A basic, fast sweep of well-known temporary locations: user and Windows temp, the
-Windows Update download cache, thumbnail cache, crash dumps, Delivery Optimization and browser
-caches. It is not a deep clean and it never touches personal files.
+**Cleanup.** Reviews known temporary locations and narrowly identified application caches.
+The central typed catalog distinguishes Windows components, NTFS metadata, registry hives,
+DriverStore, Windows Update, Store packages, GPU and launcher caches, application profiles
+and game data. A vendor name by itself is never a cleanup rule. System update stores are
+explained but must be managed through Windows Settings.
 
-Every location expands so you can pick individual files, everything is listed with its size and
-full path before anything happens, nothing runs without an explicit confirmation, and deletions go
-to the **Recycle Bin** so they can be undone.
+Deep analysis inspects old, large folders under LocalAppData and RoamingAppData. These are
+only possible leftovers, not proof that an application was uninstalled. They start unchecked.
+Known profiles, saves, mods, projects and screenshots are protected. Installed-program names,
+installation locations, active-process names and accessible executable paths are cross-checked.
+
+Every candidate is inspected in one metadata traversal. Inaccessible descendants and reparse
+points reject the whole candidate. All selected candidates must pass exclusive-open checks,
+path checks and metadata fingerprint comparison before the Shell is allowed to start.
+Items can only be sent to the **Recycle Bin**; the application vetoes permanent deletion.
+
+Using it is deliberate by design. Every group expands so you can pick individual entries, each one
+shows its size and full path, and selecting an entry explains what created it, whether it can be
+rebuilt and what the risk of removing it is. Recommended groups come checked; deep candidates never
+do. Nothing runs until you confirm a dialog that states the count and the total size.
+
+Windows Shell operations are not atomic. A concurrent change after preflight or a Shell error
+can leave part of a batch in the Recycle Bin. The UI distinguishes preflight cancellation from
+an operation that started and then failed. See [cleanup design and validation](docs/cleanup-safety.md)
+for the exact guarantees and limits.
 
 **Appearance.** Follows the Windows light/dark setting and reacts to theme changes while running.
 Available in English, Portuguese, Spanish and Russian. Language, theme and search engine are saved
@@ -104,6 +123,16 @@ from source below, which is the reason the source is public.
   came within 95% to 99% of the space Windows reports as used.
 - Cleanup does not empty the Recycle Bin. Emptying it is permanent by definition, which would
   contradict the guarantee that everything cleanup does can be undone.
+- Deep candidates are a heuristic, not a verdict. The installed-program inventory cannot prove an
+  application is gone: portable programs, custom install locations and process paths a normal
+  account cannot read may go unidentified. This is why they always start unchecked and why the
+  interface asks you to review them rather than trusting the match.
+- The integrity check fingerprints metadata — relative paths, attributes, sizes, timestamps and
+  file identities — not file contents. A change that deliberately preserves all of those can pass
+  it, and an application can use data without an observable open handle.
+- A cleanup batch is validated as a whole but is not an atomic filesystem transaction. If the Shell
+  errors partway through, some items are already in the Recycle Bin; the app reports that case
+  separately from a cancelled preflight instead of claiming success.
 - Executable paths in the Active tab are blank for protected system processes, which a normal user
   account cannot open.
 - The origin column marks processes by **location**, not by signature. A file under `System32` was
@@ -134,7 +163,7 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 `IncludeNativeLibrariesForSelfExtract` is not optional. Without it the publish leaves five native
 DLLs beside the executable, and the `.exe` on its own refuses to start.
 
-For a 228 KB build that reuses an installed .NET 8 Desktop Runtime
+For a 320 KB build that reuses an installed .NET 8 Desktop Runtime
 instead of bundling it:
 
 ```powershell
@@ -190,13 +219,25 @@ order as the `UiText` enum. A debug assertion fails at startup if any table has 
 Issues and pull requests are welcome. The project has no external dependencies beyond the .NET 8
 SDK, so `dotnet build` is the whole setup.
 
+The test suite runs against synthetic fixtures in the temporary directory and never calls the
+cleanup, Shell or delete paths, so it is safe to run on your own machine:
+
+```powershell
+dotnet run --project tests/DiskLit.Tests.csproj -c Release
+```
+
+Append `-- --visual` to open the production controls filled with synthetic rows and check theme,
+DPI and theme rendering without scanning anything. [Cleanup design and
+validation](docs/cleanup-safety.md) documents what the suite covers and what it deliberately
+does not.
+
 ## Releasing
 
 Pushing a tag builds the binary, generates the checksum file and publishes the release:
 
 ```powershell
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.3.0
+git push origin v1.3.0
 ```
 
 ## License

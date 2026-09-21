@@ -39,6 +39,31 @@ internal static class Humanize
 
 internal static class Draw
 {
+    static readonly Dictionary<int, SolidBrush> brushes = [];
+    static readonly Dictionary<(int Color, float Width), Pen> pens = [];
+    static readonly Dictionary<(string Family, float Size), Font> fonts = [];
+
+    public static SolidBrush Brush(Color color)
+    {
+        var key = color.ToArgb();
+        if (!brushes.TryGetValue(key, out var brush)) brushes[key] = brush = new SolidBrush(color);
+        return brush;
+    }
+
+    public static Pen Line(Color color, float width = 1f)
+    {
+        var key = (color.ToArgb(), width);
+        if (!pens.TryGetValue(key, out var pen)) pens[key] = pen = new Pen(color, width);
+        return pen;
+    }
+
+    public static Font Text(string family, float size)
+    {
+        var key = (family, size);
+        if (!fonts.TryGetValue(key, out var font)) fonts[key] = font = new Font(family, size);
+        return font;
+    }
+
     public static GraphicsPath RoundedRectangle(Rectangle bounds, int radius)
     {
         var path = new GraphicsPath();
@@ -276,18 +301,12 @@ internal sealed class ThemedListView : ListView
         if (title is null) return;
 
         var palette = Theme.Current;
-        using var band = new SolidBrush(palette.Rail);
-        e.Graphics.FillRectangle(band, e.Bounds);
+        e.Graphics.FillRectangle(Draw.Brush(palette.Rail), e.Bounds);
+        e.Graphics.DrawLine(Draw.Line(palette.Border), e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+        e.Graphics.FillRectangle(Draw.Brush(palette.Accent), e.Bounds.Left + 4, e.Bounds.Top + 5, 3, e.Bounds.Height - 10);
 
-        using var rule = new Pen(palette.Border);
-        e.Graphics.DrawLine(rule, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
-
-        using var accent = new SolidBrush(palette.Accent);
-        e.Graphics.FillRectangle(accent, e.Bounds.Left + 4, e.Bounds.Top + 5, 3, e.Bounds.Height - 10);
-
-        using var font = new Font("Segoe UI Semibold", 9f);
         var text = new Rectangle(e.Bounds.Left + 14, e.Bounds.Top, e.Bounds.Width - 18, e.Bounds.Height);
-        TextRenderer.DrawText(e.Graphics, title, font, text, palette.Text,
+        TextRenderer.DrawText(e.Graphics, title, Draw.Text("Segoe UI Semibold", 9f), text, palette.Text,
             TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
@@ -300,7 +319,7 @@ internal sealed class ThemedListView : ListView
         var hovered = e.ItemIndex == hotIndex;
         var background = selected ? palette.Selection : hovered ? palette.MenuHighlight : palette.Surface;
 
-        using (var fill = new SolidBrush(background)) e.Graphics.FillRectangle(fill, e.Bounds);
+        e.Graphics.FillRectangle(Draw.Brush(background), e.Bounds);
 
         var bounds = e.Bounds;
         if (e.ColumnIndex == 0 && SmallImageList is not null && e.Item is { ImageIndex: >= 0 } item
@@ -336,6 +355,7 @@ internal sealed class ThemedListView : ListView
     {
         base.OnHandleCreated(e);
         SendMessage(Handle, LvmSetExtendedListViewStyle, LvsExDoubleBuffer, LvsExDoubleBuffer);
+        Theme.ApplyNativeListStyle(this);
     }
 
     protected override void WndProc(ref Message m)
@@ -348,10 +368,9 @@ internal sealed class ThemedListView : ListView
     static void PaintHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
     {
         var palette = Theme.Current;
-        using var background = new SolidBrush(palette.Surface);
-        e.Graphics.FillRectangle(background, e.Bounds);
+        e.Graphics.FillRectangle(Draw.Brush(palette.Surface), e.Bounds);
 
-        using var separator = new Pen(palette.Border);
+        var separator = Draw.Line(palette.Border);
         e.Graphics.DrawLine(separator, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
         if (e.ColumnIndex > 0)
             e.Graphics.DrawLine(separator, e.Bounds.Left, e.Bounds.Top + 5, e.Bounds.Left, e.Bounds.Bottom - 6);
